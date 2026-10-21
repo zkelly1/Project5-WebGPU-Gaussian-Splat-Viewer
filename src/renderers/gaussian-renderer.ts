@@ -5,7 +5,7 @@ import { get_sorter,c_histogram_block_rows,C } from '../sort/sort';
 import { Renderer } from './renderer';
 
 export interface GaussianRenderer extends Renderer {
-
+  set_scale: (scale: number) => void,
 }
 
 // Utility to create GPU buffers
@@ -14,7 +14,7 @@ const createBuffer = (
   label: string,
   size: number,
   usage: GPUBufferUsageFlags,
-  data?: ArrayBuffer | ArrayBufferView
+  data?: GPUAllowSharedBufferSource
 ) => {
   const buffer = device.createBuffer({ label, size, usage });
   if (data) device.queue.writeBuffer(buffer, 0, data);
@@ -35,6 +35,14 @@ export default function get_renderer(
   // ===============================================
 
   const nulling_data = new Uint32Array([0]);
+  // A vec4 center and vec2 half size take 32 bytes with storage alignment.
+  const splat_buffer = createBuffer(device, '2d splats', Math.max(1, pc.num_points) * 32,
+    GPUBufferUsage.STORAGE);
+  const settings_data = new Float32Array([1, pc.sh_deg]);
+  const settings_buffer = createBuffer(device, 'render settings', 8,
+    GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, settings_data);
+  const draw_buffer = createBuffer(device, 'quad draw indirect', 16,
+    GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST, new Uint32Array([4, 0, 0, 0]));
 
   // ===============================================
   //    Create Compute Pipeline and Bind Groups
@@ -52,14 +60,29 @@ export default function get_renderer(
     },
   });
 
+  const camera_bind_group = device.createBindGroup({
+    label: 'preprocess camera and settings',
+    layout: preprocess_pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: camera_buffer } },
+      { binding: 1, resource: { buffer: settings_buffer } },
+    ],
+  });
+  const gaussian_bind_group = device.createBindGroup({
+    label: 'preprocess gaussians',
+    layout: preprocess_pipeline.getBindGroupLayout(1),
+    entries: [
+      { binding: 0, resource: { buffer: pc.gaussian_3d_buffer } },
+      { binding: 1, resource: { buffer: splat_buffer } },
+    ],
+  });
+
   const sort_bind_group = device.createBindGroup({
     label: 'sort',
     layout: preprocess_pipeline.getBindGroupLayout(2),
     entries: [
       { binding: 0, resource: { buffer: sorter.sort_info_buffer } },
-      { binding: 1, resource: { buffer: sorter.ping_pong[0].sort_depths_buffer } },
       { binding: 2, resource: { buffer: sorter.ping_pong[0].sort_indices_buffer } },
-      { binding: 3, resource: { buffer: sorter.sort_dispatch_indirect_buffer } },
     ],
   });
 
@@ -67,7 +90,26 @@ export default function get_renderer(
   // ===============================================
   //    Create Render Pipeline and Bind Groups
   // ===============================================
-  
+  const render_shader = device.createShaderModule({ code: renderWGSL });
+  const render_pipeline = device.createRenderPipeline({
+    label: 'gaussian quads',
+    layout: 'auto',
+    vertex: { module: render_shader, entryPoint: 'vs_main' },
+    fragment: {
+      module: render_shader,
+      entryPoint: 'fs_main',
+      targets: [{ format: presentation_format }],
+    },
+    primitive: { topology: 'triangle-strip' },
+  });
+  const render_bind_group = device.createBindGroup({
+    label: 'quad splats and indices',
+    layout: render_pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: splat_buffer } },
+      { binding: 1, resource: { buffer: sorter.ping_pong[0].sort_indices_buffer } },
+    ],
+  });
 
   // ===============================================
   //    Command Encoder Functions
@@ -79,7 +121,34 @@ export default function get_renderer(
   // ===============================================
   return {
     frame: (encoder: GPUCommandEncoder, texture_view: GPUTextureView) => {
-      sorter.sort(encoder);
+      device.queue.writeBuffer(sorter.sort_info_buffer, 0, nulling_data);
+      const compute_pass = encoder.beginComputePass({ label: 'preprocess' });
+      compute_pass.setPipeline(preprocess_pipeline);
+      compute_pass.setBindGroup(0, camera_bind_group);
+      compute_pass.setBindGroup(1, gaussian_bind_group);
+      compute_pass.setBindGroup(2, sort_bind_group);
+      compute_pass.dispatchWorkgroups(Math.ceil(pc.num_points / C.histogram_wg_size));
+      compute_pass.end();
+
+      // Copy the visible count into instanceCount, after preprocessing finishes.
+      encoder.copyBufferToBuffer(sorter.sort_info_buffer, 0, draw_buffer, 4, 4);
+      const pass = encoder.beginRenderPass({
+        label: 'gaussian quad render',
+        colorAttachments: [{
+          view: texture_view,
+          clearValue: [0, 0, 0, 1],
+          loadOp: 'clear',
+          storeOp: 'store',
+        }],
+      });
+      pass.setPipeline(render_pipeline);
+      pass.setBindGroup(0, render_bind_group);
+      pass.drawIndirect(draw_buffer, 0);
+      pass.end();
+    },
+    set_scale: (scale: number) => {
+      settings_data[0] = scale;
+      device.queue.writeBuffer(settings_buffer, 0, settings_data);
     },
     camera_buffer,
   };

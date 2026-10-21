@@ -56,10 +56,18 @@ struct Gaussian {
 };
 
 struct Splat {
-    //TODO: store information for 2D splat rendering
+    center: vec4<f32>,
+    half_size: vec2<f32>,
 };
 
-//TODO: bind your data here
+@group(0) @binding(0)
+var<uniform> camera: CameraUniforms;
+@group(0) @binding(1)
+var<uniform> settings: RenderSettings;
+@group(1) @binding(0)
+var<storage, read> gaussians: array<Gaussian>;
+@group(1) @binding(1)
+var<storage, read_write> splats: array<Splat>;
 @group(2) @binding(0)
 var<storage, read_write> sort_infos: SortInfos;
 @group(2) @binding(1)
@@ -111,8 +119,27 @@ fn computeColorFromSH(dir: vec3<f32>, v_idx: u32, sh_deg: u32) -> vec3<f32> {
 @compute @workgroup_size(workgroupSize,1,1)
 fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) wgs: vec3<u32>) {
     let idx = gid.x;
-    //TODO: set up pipeline as described in instruction
+    if (idx >= arrayLength(&gaussians)) {
+        return;
+    }
 
-    let keys_per_dispatch = workgroupSize * sortKeyPerThread; 
-    // increment DispatchIndirect.dispatchx each time you reach limit for one dispatch of keys
+    let gaussian = gaussians[idx];
+    let a = unpack2x16float(gaussian.pos_opacity[0]);
+    let b = unpack2x16float(gaussian.pos_opacity[1]);
+    let pos = vec4<f32>(a.x, a.y, b.x, 1.);
+    let clip = camera.proj * camera.view * pos;
+    // Reject points behind the camera before dividing by w.
+    if (clip.w <= 0.) {
+        return;
+    }
+    let ndc = clip.xyz / clip.w;
+    // Keep a margin around the screen so quads near the edges survive.
+    if (abs(ndc.x) > 1.2 || abs(ndc.y) > 1.2 || ndc.z < 0. || ndc.z > 1.) {
+        return;
+    }
+
+    splats[idx].center = vec4<f32>(ndc, 1.);
+    splats[idx].half_size = vec2<f32>(0.005 * settings.gaussian_scaling);
+    let visible_idx = atomicAdd(&sort_infos.keys_size, 1u);
+    sort_indices[visible_idx] = idx;
 }
