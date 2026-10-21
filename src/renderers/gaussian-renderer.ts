@@ -35,8 +35,9 @@ export default function get_renderer(
   // ===============================================
 
   const nulling_data = new Uint32Array([0]);
-  // A vec4 center and vec2 half size take 32 bytes with storage alignment.
-  const splat_buffer = createBuffer(device, '2d splats', Math.max(1, pc.num_points) * 32,
+  const dispatch_data = new Uint32Array([0, 1, 1]);
+  // Center, quad size, conic, and color occupy 64 bytes with storage alignment.
+  const splat_buffer = createBuffer(device, '2d splats', Math.max(1, pc.num_points) * 64,
     GPUBufferUsage.STORAGE);
   const settings_data = new Float32Array([1, pc.sh_deg]);
   const settings_buffer = createBuffer(device, 'render settings', 8,
@@ -74,6 +75,7 @@ export default function get_renderer(
     entries: [
       { binding: 0, resource: { buffer: pc.gaussian_3d_buffer } },
       { binding: 1, resource: { buffer: splat_buffer } },
+      { binding: 2, resource: { buffer: pc.sh_buffer } },
     ],
   });
 
@@ -82,7 +84,9 @@ export default function get_renderer(
     layout: preprocess_pipeline.getBindGroupLayout(2),
     entries: [
       { binding: 0, resource: { buffer: sorter.sort_info_buffer } },
+      { binding: 1, resource: { buffer: sorter.ping_pong[0].sort_depths_buffer } },
       { binding: 2, resource: { buffer: sorter.ping_pong[0].sort_indices_buffer } },
+      { binding: 3, resource: { buffer: sorter.sort_dispatch_indirect_buffer } },
     ],
   });
 
@@ -98,7 +102,13 @@ export default function get_renderer(
     fragment: {
       module: render_shader,
       entryPoint: 'fs_main',
-      targets: [{ format: presentation_format }],
+      targets: [{
+        format: presentation_format,
+        blend: {
+          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        },
+      }],
     },
     primitive: { topology: 'triangle-strip' },
   });
@@ -122,6 +132,7 @@ export default function get_renderer(
   return {
     frame: (encoder: GPUCommandEncoder, texture_view: GPUTextureView) => {
       device.queue.writeBuffer(sorter.sort_info_buffer, 0, nulling_data);
+      device.queue.writeBuffer(sorter.sort_dispatch_indirect_buffer, 0, dispatch_data);
       const compute_pass = encoder.beginComputePass({ label: 'preprocess' });
       compute_pass.setPipeline(preprocess_pipeline);
       compute_pass.setBindGroup(0, camera_bind_group);
@@ -132,6 +143,7 @@ export default function get_renderer(
 
       // Copy the visible count into instanceCount, after preprocessing finishes.
       encoder.copyBufferToBuffer(sorter.sort_info_buffer, 0, draw_buffer, 4, 4);
+      sorter.sort(encoder);
       const pass = encoder.beginRenderPass({
         label: 'gaussian quad render',
         colorAttachments: [{
