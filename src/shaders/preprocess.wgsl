@@ -18,7 +18,7 @@ const SH_C3 = array<f32,7>(
 );
 
 override workgroupSize: u32;
-override sortKeyPerThread: u32;
+override sortBlockSize: u32;
 
 struct DispatchIndirect {
     dispatch_x: atomic<u32>,
@@ -47,6 +47,7 @@ struct CameraUniforms {
 struct RenderSettings {
     gaussian_scaling: f32,
     sh_deg: f32,
+    culling: f32,
 }
 
 struct Gaussian {
@@ -144,7 +145,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     }
     let ndc = clip.xyz / clip.w;
     // Keep a margin around the screen so quads near the edges survive.
-    if (abs(ndc.x) > 1.2 || abs(ndc.y) > 1.2 || ndc.z < 0. || ndc.z > 1.) {
+    if (settings.culling > 0. && (abs(ndc.x) > 1.2 || abs(ndc.y) > 1.2 || ndc.z < 0. || ndc.z > 1.)) {
         return;
     }
 
@@ -201,7 +202,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     sort_indices[visible_idx] = idx;
     // The radix sorter is ascending. Inverting positive depth bits puts far points first.
     sort_depths[visible_idx] = ~bitcast<u32>(view_pos.z);
-    if (visible_idx % (workgroupSize * sortKeyPerThread) == 0u) {
+    if (visible_idx % sortBlockSize == 0u) {
         atomicAdd(&sort_dispatch.dispatch_x, 1u);
     }
 }

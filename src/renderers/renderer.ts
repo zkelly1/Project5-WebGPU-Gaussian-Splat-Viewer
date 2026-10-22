@@ -6,6 +6,7 @@ import { default as get_renderer_pointcloud } from './point-cloud-renderer';
 import { Camera, load_camera_presets} from '../camera/camera';
 import { CameraControl } from '../camera/camera-control';
 import { time, timeReturn } from '../utils/simple-console';
+import { benchmark } from '../benchmark';
 
 export interface Renderer {
   frame: (encoder: GPUCommandEncoder, texture_view: GPUTextureView) => void,
@@ -24,11 +25,14 @@ export default async function init(
   let pointcloud_renderer: Renderer | undefined; 
   let renderer: Renderer | undefined; 
   let cameras;
+  let benchmarking = false;
+  let point_count = 0;
   
   const camera = new Camera(canvas, device);
   const control = new CameraControl(camera);
 
   const observer = new ResizeObserver(() => {
+    if (benchmarking) return;
     canvas.width = canvas.clientWidth;
     canvas.height = canvas.clientHeight;
 
@@ -48,6 +52,8 @@ export default async function init(
   const params = {
     fps: 0.0,
     gaussian_multiplier: 1,
+    culling: true,
+    workgroup_size: 256,
     renderer: 'pointcloud',
     ply_file: '',
     cam_file: '',
@@ -87,6 +93,9 @@ export default async function init(
         pointcloud_renderer = get_renderer_pointcloud(pc, device, presentation_format, camera.uniform_buffer);
         gaussian_renderer = get_renderer_gaussian(pc, device, presentation_format, camera.uniform_buffer);
         gaussian_renderer.set_scale(params.gaussian_multiplier);
+        gaussian_renderer.set_culling(params.culling);
+        gaussian_renderer.set_workgroup_size(params.workgroup_size);
+        point_count = pc.num_points;
         renderers = {
           pointcloud: pointcloud_renderer,
           gaussian: gaussian_renderer,
@@ -127,6 +136,7 @@ export default async function init(
   }
 
   document.addEventListener('keydown', (event) => {
+    if (benchmarking) return;
     switch(event.key) {
       case '0':
       case '1':
@@ -140,13 +150,60 @@ export default async function init(
       case '9':
         const i = parseInt(event.key);
         console.log(`set to camera preset ${i}`);
-        camera.set_preset(cameras[i]);
+        if (cameras?.[i]) camera.set_preset(cameras[i]);
         break;
     }
   });
 
+  pane.addInput(params, 'culling').on('change', e => {
+    gaussian_renderer?.set_culling(e.value);
+  });
+  pane.addInput(params, 'workgroup_size', {
+    options: { '64': 64, '128': 128, '256': 256 },
+  }).on('change', e => {
+    gaussian_renderer?.set_workgroup_size(e.value);
+  });
+  pane.addButton({ title: 'Save benchmark' }).on('click', async () => {
+    if (!renderer || !ply_file_loaded || !cam_file_loaded || benchmarking) return;
+    benchmarking = true;
+    pane.disabled = true;
+    const previous_pointer_events = canvas.style.pointerEvents;
+    canvas.style.pointerEvents = 'none';
+    try {
+      const result = await benchmark(renderer, device, presentation_format, canvas.width, canvas.height);
+      const report = {
+        ...result,
+        browser: navigator.userAgent,
+        width: canvas.width,
+        height: canvas.height,
+        points: point_count,
+        renderer: params.renderer,
+        scale: params.gaussian_multiplier,
+        culling: params.culling,
+        workgroup_size: params.workgroup_size,
+        camera_position: Array.from(camera.position),
+        camera_rotation: Array.from(camera.rotation),
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `benchmark-${params.renderer}-${point_count}-${Date.now()}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      console.error('Benchmark failed:', error);
+    } finally {
+      canvas.style.pointerEvents = previous_pointer_events;
+      pane.disabled = false;
+      benchmarking = false;
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+      camera.on_update_canvas();
+    }
+  });
+
   function frame() {
-    if (ply_file_loaded && cam_file_loaded) {
+    if (ply_file_loaded && cam_file_loaded && !benchmarking) {
       params.fps=1.0/timeReturn()*1000.0;
       time();
       const encoder = device.createCommandEncoder();
