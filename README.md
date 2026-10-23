@@ -165,8 +165,16 @@ runs reported no WebGPU validation errors. The [36-second demo](public/demo.webm
 shows point clouds, Gaussian splats, camera presets, and scale changes.
 
 The GitHub Pages address returned HTTP 404 when checked on October 21, 2026.
-The repository includes a Pages workflow; a working hosted demo has not yet been
+On October 22, the repository reported Pages disabled and no workflow runs.
+The deployment workflow is present and active, but a hosted demo has not yet been
 verified. Local captures and measurements do not depend on that deployment.
+
+To publish, open the repository's **Settings → Pages**, select **GitHub Actions**
+as the source, and enable Actions for the fork if GitHub prompts for it. Push the
+finished changes to `main`, or run **Deploy static content to Pages** from the
+Actions tab. The workflow builds with `/Project5-WebGPU-Gaussian-Splat-Viewer/`
+as the base path. After deployment, the video is available at `demo.webm` under
+that path. Check the deployment URL before treating it as the live demo.
 Tile-based sorting and half-precision computation are not implemented.
 
 ## Credits
