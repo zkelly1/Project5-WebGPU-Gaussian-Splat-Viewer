@@ -16,7 +16,7 @@ const createBuffer = (
   label: string,
   size: number,
   usage: GPUBufferUsageFlags,
-  data?: GPUAllowSharedBufferSource
+  data?: Parameters<GPUQueue['writeBuffer']>[2]
 ) => {
   const buffer = device.createBuffer({ label, size, usage });
   if (data) device.queue.writeBuffer(buffer, 0, data);
