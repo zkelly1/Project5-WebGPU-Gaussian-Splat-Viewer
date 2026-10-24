@@ -177,7 +177,27 @@ Pushes to `main` run **Deploy static content to Pages**. The workflow builds wit
 `/Project5-WebGPU-Gaussian-Splat-Viewer/` as the base path. Scene files are selected
 locally through the viewer; they are not included in the deployed site.
 
-Tile-based sorting and half-precision computation are not implemented.
+## Extra credit: half-precision preprocessing
+
+Enable **Half precision** in Config to evaluate quaternion rotation and spherical
+harmonic lighting with WGSL `f16` arithmetic. The same shader source supplies both
+precision modes, and pipelines are cached for each precision and workgroup size.
+Camera transforms, covariance projection, conic inversion, and depth sorting stay
+in full precision. The packed input buffers and 64-byte output layout are unchanged.
+This is a mixed-precision path; it does not reduce output-buffer memory.
+
+The viewer requests `shader-f16` only when the adapter supports it. Otherwise the
+checkbox is disabled and the original full-precision path remains available.
+Saved benchmark reports include the precision setting. Full precision is the
+default; performance depends on the GPU, so no speedup is assumed.
+
+The [GPU validation results](performance/half-precision-validation.json) compare
+a 100,000-point bicycle sample at 640 � 360. Half precision differed from full
+precision by about 0.008 RGB levels on average and at most 3 out of 255. All three
+workgroup sizes, zero-scale recovery, and a device without the enabled f16 feature
+passed without WebGPU validation errors. These image checks do not measure speed.
+
+Tile-based sorting is the remaining extra-credit item.
 
 ## Credits
 

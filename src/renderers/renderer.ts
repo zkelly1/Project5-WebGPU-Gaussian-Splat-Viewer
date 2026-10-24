@@ -53,6 +53,7 @@ export default async function init(
     fps: 0.0,
     gaussian_multiplier: 1,
     culling: true,
+    half_precision: false,
     workgroup_size: 256,
     renderer: 'pointcloud',
     ply_file: '',
@@ -93,6 +94,7 @@ export default async function init(
         pointcloud_renderer = get_renderer_pointcloud(pc, device, presentation_format, camera.uniform_buffer);
         gaussian_renderer = get_renderer_gaussian(pc, device, presentation_format, camera.uniform_buffer);
         gaussian_renderer.set_scale(params.gaussian_multiplier);
+        gaussian_renderer.set_half_precision(params.half_precision);
         gaussian_renderer.set_culling(params.culling);
         gaussian_renderer.set_workgroup_size(params.workgroup_size);
         point_count = pc.num_points;
@@ -155,6 +157,12 @@ export default async function init(
     }
   });
 
+  pane.addInput(params, 'half_precision', {
+    label: 'Half precision',
+    disabled: !device.features.has('shader-f16'),
+  }).on('change', e => {
+    gaussian_renderer?.set_half_precision(e.value);
+  });
   pane.addInput(params, 'culling').on('change', e => {
     gaussian_renderer?.set_culling(e.value);
   });
@@ -180,6 +188,7 @@ export default async function init(
         renderer: params.renderer,
         scale: params.gaussian_multiplier,
         culling: params.culling,
+        half_precision: params.renderer === 'gaussian' && params.half_precision,
         workgroup_size: params.workgroup_size,
         camera_position: Array.from(camera.position),
         camera_rotation: Array.from(camera.rotation),

@@ -5,6 +5,7 @@ import { get_sorter,c_histogram_block_rows,C } from '../sort/sort';
 import { Renderer } from './renderer';
 
 export interface GaussianRenderer extends Renderer {
+  set_half_precision: (enabled: boolean) => void,
   set_scale: (scale: number) => void,
   set_culling: (enabled: boolean) => void,
   set_workgroup_size: (size: number) => void,
@@ -51,6 +52,8 @@ export default function get_renderer(
   //    Create Compute Pipeline and Bind Groups
   // ===============================================
   let workgroup_size = C.histogram_wg_size;
+  let half_precision = false;
+  let half_shader: GPUShaderModule | undefined;
   const preprocess_shader = device.createShaderModule({ code: preprocessWGSL });
   const binding_types: GPUBufferBindingType[][] = [
     ['uniform', 'uniform'],
@@ -79,7 +82,7 @@ export default function get_renderer(
     },
   });
 
-  const preprocess_pipelines = new Map([[workgroup_size, preprocess_pipeline]]);
+  const preprocess_pipelines = new Map([[`false:${workgroup_size}`, preprocess_pipeline]]);
 
   const camera_bind_group = device.createBindGroup({
     label: 'preprocess camera and settings',
@@ -149,6 +152,32 @@ export default function get_renderer(
   // ===============================================
   //    Return Render Object
   // ===============================================
+  function select_pipeline(size: number, half: boolean) {
+    const key = `${half}:${size}`;
+    if (!preprocess_pipelines.has(key)) {
+      if (half && !half_shader) {
+        half_shader = device.createShaderModule({
+          code: preprocessWGSL.replace('alias ShapeFloat = f32;', 'enable f16;\nalias ShapeFloat = f16;'),
+        });
+      }
+      preprocess_pipelines.set(key, device.createComputePipeline({
+        label: `preprocess ${half ? 'f16' : 'f32'} ${size}`,
+        layout: preprocess_layout,
+        compute: {
+          module: half ? half_shader! : preprocess_shader,
+          entryPoint: 'preprocess',
+          constants: {
+            workgroupSize: size,
+            sortBlockSize: C.histogram_wg_size * c_histogram_block_rows,
+          },
+        },
+      }));
+    }
+    workgroup_size = size;
+    half_precision = half;
+    preprocess_pipeline = preprocess_pipelines.get(key)!;
+  }
+
   return {
     frame: (encoder: GPUCommandEncoder, texture_view: GPUTextureView) => {
       device.queue.writeBuffer(sorter.sort_info_buffer, 0, nulling_data);
@@ -190,23 +219,13 @@ export default function get_renderer(
       if (![64, 128, 256].includes(size)) {
         throw new Error('Preprocess workgroup size must be 64, 128, or 256.');
       }
-      if (!preprocess_pipelines.has(size)) {
-        preprocess_pipelines.set(size, device.createComputePipeline({
-          label: `preprocess ${size}`,
-          layout: preprocess_layout,
-          compute: {
-            module: preprocess_shader,
-            entryPoint: 'preprocess',
-            constants: {
-              workgroupSize: size,
-              // Sorting still uses its original 256-thread groups.
-              sortBlockSize: C.histogram_wg_size * c_histogram_block_rows,
-            },
-          },
-        }));
+      select_pipeline(size, half_precision);
+    },
+    set_half_precision: (enabled: boolean) => {
+      if (enabled && !device.features.has('shader-f16')) {
+        throw new Error('Half precision requires shader-f16 support.');
       }
-      workgroup_size = size;
-      preprocess_pipeline = preprocess_pipelines.get(size)!;
+      select_pipeline(workgroup_size, enabled);
     },
     camera_buffer,
   };

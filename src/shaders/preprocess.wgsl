@@ -1,13 +1,16 @@
-const SH_C0: f32 = 0.28209479177387814;
-const SH_C1 = 0.4886025119029199;
-const SH_C2 = array<f32,5>(
+// Rotation and SH arithmetic can use f16; projection keeps its f32 range.
+alias ShapeFloat = f32;
+
+const SH_C0: ShapeFloat = 0.28209479177387814;
+const SH_C1: ShapeFloat = 0.4886025119029199;
+const SH_C2 = array<ShapeFloat,5>(
     1.0925484305920792,
     -1.0925484305920792,
     0.31539156525252005,
     -1.0925484305920792,
     0.5462742152960396
 );
-const SH_C3 = array<f32,7>(
+const SH_C3 = array<ShapeFloat,7>(
     -0.5900435899266435,
     2.890611442640554,
     -0.4570457994644658,
@@ -84,17 +87,17 @@ var<storage, read_write> sort_indices : array<u32>;
 var<storage, read_write> sort_dispatch: DispatchIndirect;
 
 /// reads the ith sh coef from the storage buffer 
-fn sh_coef(splat_idx: u32, c_idx: u32) -> vec3<f32> {
+fn sh_coef(splat_idx: u32, c_idx: u32) -> vec3<ShapeFloat> {
     // Each point has 16 RGB coefficients, packed as consecutive half floats.
     let offset = splat_idx * 48u + c_idx * 3u;
     let r = unpack2x16float(sh_coeffs[offset / 2u]);
     let g = unpack2x16float(sh_coeffs[(offset + 1u) / 2u]);
     let b = unpack2x16float(sh_coeffs[(offset + 2u) / 2u]);
-    return vec3<f32>(r[offset % 2u], g[(offset + 1u) % 2u], b[(offset + 2u) % 2u]);
+    return vec3<ShapeFloat>(vec3<f32>(r[offset % 2u], g[(offset + 1u) % 2u], b[(offset + 2u) % 2u]));
 }
 
 // spherical harmonics evaluation with Condon–Shortley phase
-fn computeColorFromSH(dir: vec3<f32>, v_idx: u32, sh_deg: u32) -> vec3<f32> {
+fn computeColorFromSH(dir: vec3<ShapeFloat>, v_idx: u32, sh_deg: u32) -> vec3<ShapeFloat> {
     var result = SH_C0 * sh_coef(v_idx, 0u);
 
     if sh_deg > 0u {
@@ -123,7 +126,7 @@ fn computeColorFromSH(dir: vec3<f32>, v_idx: u32, sh_deg: u32) -> vec3<f32> {
     }
     result += 0.5;
 
-    return  max(vec3<f32>(0.), result);
+    return  max(vec3<ShapeFloat>(0.), result);
 }
 
 @compute @workgroup_size(workgroupSize,1,1)
@@ -155,20 +158,20 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     let rot_a = unpack2x16float(gaussian.rot[0]);
     let rot_b = unpack2x16float(gaussian.rot[1]);
     let q = vec4<f32>(rot_a, rot_b);
-    let rotation = q * inverseSqrt(max(dot(q, q), 1e-8));
+    let rotation = vec4<ShapeFloat>(q * inverseSqrt(max(dot(q, q), 1e-8)));
     let w = rotation.x;
     let x = rotation.y;
     let y = rotation.z;
     let z = rotation.w;
-    let r = mat3x3<f32>(
-        vec3<f32>(1. - 2. * (y*y + z*z), 2. * (x*y + w*z), 2. * (x*z - w*y)),
-        vec3<f32>(2. * (x*y - w*z), 1. - 2. * (x*x + z*z), 2. * (y*z + w*x)),
-        vec3<f32>(2. * (x*z + w*y), 2. * (y*z - w*x), 1. - 2. * (x*x + y*y))
+    let r = mat3x3<ShapeFloat>(
+        vec3<ShapeFloat>(1. - 2. * (y*y + z*z), 2. * (x*y + w*z), 2. * (x*z - w*y)),
+        vec3<ShapeFloat>(2. * (x*y - w*z), 1. - 2. * (x*x + z*z), 2. * (y*z + w*x)),
+        vec3<ShapeFloat>(2. * (x*z + w*y), 2. * (y*z - w*x), 1. - 2. * (x*x + y*y))
     );
     let scale_a = unpack2x16float(gaussian.scale[0]);
     let scale_b = unpack2x16float(gaussian.scale[1]);
     let scale = exp(vec3<f32>(scale_a, scale_b.x)) * settings.gaussian_scaling;
-    let rs = mat3x3<f32>(r[0] * scale.x, r[1] * scale.y, r[2] * scale.z);
+    let rs = mat3x3<f32>(vec3<f32>(r[0]) * scale.x, vec3<f32>(r[1]) * scale.y, vec3<f32>(r[2]) * scale.z);
     let covariance = rs * transpose(rs);
     let view_rotation = mat3x3<f32>(camera.view[0].xyz, camera.view[1].xyz, camera.view[2].xyz);
     let view_covariance = view_rotation * covariance * transpose(view_rotation);
@@ -190,7 +193,7 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     let largest = mid + sqrt(max(0., 0.25 * (cov_xx - cov_yy) * (cov_xx - cov_yy) + cov_xy * cov_xy));
     let radius = ceil(3. * sqrt(largest));
     let direction = normalize(pos.xyz - camera.view_inv[3].xyz);
-    let color = computeColorFromSH(direction, idx, u32(settings.sh_deg));
+    let color = vec3<f32>(computeColorFromSH(vec3<ShapeFloat>(direction), idx, u32(settings.sh_deg)));
     let opacity = 1. / (1. + exp(-b.y));
 
     splats[idx].center = vec4<f32>(ndc, 1.);
