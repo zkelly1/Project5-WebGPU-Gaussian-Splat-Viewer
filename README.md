@@ -177,6 +177,10 @@ Pushes to `main` run **Deploy static content to Pages**. The workflow builds wit
 `/Project5-WebGPU-Gaussian-Splat-Viewer/` as the base path. Scene files are selected
 locally through the viewer; they are not included in the deployed site.
 
+The [extra-credit demo](public/extra-credit.webm) shows full and half precision
+with global and tile-based sorting on the full bicycle scene. Each combination
+is labeled in the video.
+
 ## Extra credit: half-precision preprocessing
 
 Enable **Half precision** in Config to evaluate quaternion rotation and spherical
