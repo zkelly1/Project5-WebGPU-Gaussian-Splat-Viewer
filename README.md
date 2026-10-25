@@ -197,7 +197,45 @@ precision by about 0.008 RGB levels on average and at most 3 out of 255. All thr
 workgroup sizes, zero-scale recovery, and a device without the enabled f16 feature
 passed without WebGPU validation errors. These image checks do not measure speed.
 
-Tile-based sorting is the remaining extra-credit item.
+## Extra credit: tile-based sorting
+
+Enable **Tile sorting** in Config while using the Gaussian renderer. Each splat
+is inserted into every 16 × 16 tile touched by its projected square. A workgroup
+sorts each tile's depth/index pairs with bitonic sort. The compute compositor
+walks the list front to back and stops when transmittance drops below 0.0001.
+It writes the final image to an RGBA texture; a fullscreen triangle presents it.
+The projection and alpha equations follow the assignment's
+[Gaussian Splatting Notes](https://github.com/kwea123/gaussian_splatting_notes).
+
+Each tile has space for 1,024 entries. Overflow is detected on the GPU. If any tile
+overflows, an indirect dispatch enables the original global radix sort and an
+indirect draw renders only overflow-tile fragments into a separate texture. The
+compute compositor takes those pixels from that texture. This keeps dense tiles
+complete without unbounded per-pixel searches. It is a hybrid fallback, rather
+than a fully compute-only renderer for every tile. Frames without overflow skip
+the global histogram and scatter dispatches. Tile storage is recreated on resize;
+viewports beyond the device's buffer limits fall back to the global renderer.
+
+Tile sorting and half precision can be enabled together. Both settings are recorded
+in benchmark exports (the tile flag records the requested mode; an oversized
+viewport can still use the fallback). Global sorting remains the default.
+
+[Validation results](performance/tile-validation.json) cover the full 1,063,091-point
+bicycle scene at 1280 × 720, a 100,000-point sample with all workgroup sizes and
+both precision modes, and zero-scale recovery. The full scene's mean RGB difference
+from the original renderer was 0.022 out of 255, with a maximum of 8. Compute
+accumulation, early termination, and ordering of equal-depth splats can differ from
+fixed-function blending. No WebGPU validation errors were reported.
+
+The sample benchmark at 640 × 360 measured a 4.1 ms median for global rendering
+and 6.1 ms for tiles, using 30 warmup and 120 measured frames. This implementation
+is slower in that run: tile binning, local sorting, and the dense-tile fallback add
+work. These are CPU frame-completion timings, not isolated GPU stage timings.
+
+For repeatable boundary checks, run the development server and open
+`/tests/tile-validation.html`. It requires no scene files and checks known alpha
+compositing results with 0, 2, 1,024, and 1,025 overlapping splats, before and after
+resizing to dimensions that are not multiples of the tile size.
 
 ## Credits
 

@@ -2,9 +2,12 @@ import { PointCloud } from '../utils/load';
 import preprocessWGSL from '../shaders/preprocess.wgsl';
 import renderWGSL from '../shaders/gaussian.wgsl';
 import { get_sorter,c_histogram_block_rows,C } from '../sort/sort';
+import get_tile_renderer from './tile-renderer';
 import { Renderer } from './renderer';
 
 export interface GaussianRenderer extends Renderer {
+  set_tile_sorting: (enabled: boolean) => void,
+  set_viewport: (width: number, height: number) => void,
   set_half_precision: (enabled: boolean) => void,
   set_scale: (scale: number) => void,
   set_culling: (enabled: boolean) => void,
@@ -152,6 +155,10 @@ export default function get_renderer(
   // ===============================================
   //    Return Render Object
   // ===============================================
+  let tile_sorting = false;
+  let viewport_width = 1, viewport_height = 1;
+  let tiles: ReturnType<typeof get_tile_renderer> | undefined;
+
   function select_pipeline(size: number, half: boolean) {
     const key = `${half}:${size}`;
     if (!preprocess_pipelines.has(key)) {
@@ -192,7 +199,18 @@ export default function get_renderer(
 
       // Copy the visible count into instanceCount, after preprocessing finishes.
       encoder.copyBufferToBuffer(sorter.sort_info_buffer, 0, draw_buffer, 4, 4);
+      let use_tiles = tile_sorting;
+      if (use_tiles) {
+        if (!tiles) tiles = get_tile_renderer(device, presentation_format, splat_buffer, sorter, pc.num_points);
+        use_tiles = tiles.resize(viewport_width, viewport_height);
+        if (use_tiles) tiles.bin(encoder);
+      }
+      // Keep the complete sorted list for dense tiles that exceed local capacity.
       sorter.sort(encoder);
+      if (use_tiles) {
+        tiles!.frame(encoder, texture_view);
+        return;
+      }
       const pass = encoder.beginRenderPass({
         label: 'gaussian quad render',
         colorAttachments: [{
@@ -206,6 +224,11 @@ export default function get_renderer(
       pass.setBindGroup(0, render_bind_group);
       pass.drawIndirect(draw_buffer, 0);
       pass.end();
+    },
+    set_tile_sorting: (enabled: boolean) => { tile_sorting = enabled; },
+    set_viewport: (width: number, height: number) => {
+      viewport_width = Math.max(1, Math.floor(width));
+      viewport_height = Math.max(1, Math.floor(height));
     },
     set_scale: (scale: number) => {
       settings_data[0] = scale;

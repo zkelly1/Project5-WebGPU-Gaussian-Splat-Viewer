@@ -54,6 +54,7 @@ export default async function init(
     gaussian_multiplier: 1,
     culling: true,
     half_precision: false,
+    tile_sorting: false,
     workgroup_size: 256,
     renderer: 'pointcloud',
     ply_file: '',
@@ -95,6 +96,8 @@ export default async function init(
         gaussian_renderer = get_renderer_gaussian(pc, device, presentation_format, camera.uniform_buffer);
         gaussian_renderer.set_scale(params.gaussian_multiplier);
         gaussian_renderer.set_half_precision(params.half_precision);
+        gaussian_renderer.set_tile_sorting(params.tile_sorting);
+        gaussian_renderer.set_viewport(canvas.width, canvas.height);
         gaussian_renderer.set_culling(params.culling);
         gaussian_renderer.set_workgroup_size(params.workgroup_size);
         point_count = pc.num_points;
@@ -157,6 +160,9 @@ export default async function init(
     }
   });
 
+  pane.addInput(params, 'tile_sorting', { label: 'Tile sorting' }).on('change', e => {
+    gaussian_renderer?.set_tile_sorting(e.value);
+  });
   pane.addInput(params, 'half_precision', {
     label: 'Half precision',
     disabled: !device.features.has('shader-f16'),
@@ -178,6 +184,7 @@ export default async function init(
     const previous_pointer_events = canvas.style.pointerEvents;
     canvas.style.pointerEvents = 'none';
     try {
+      gaussian_renderer?.set_viewport(canvas.width, canvas.height);
       const result = await benchmark(renderer, device, presentation_format, canvas.width, canvas.height);
       const report = {
         ...result,
@@ -189,6 +196,7 @@ export default async function init(
         scale: params.gaussian_multiplier,
         culling: params.culling,
         half_precision: params.renderer === 'gaussian' && params.half_precision,
+        tile_sorting: params.renderer === 'gaussian' && params.tile_sorting,
         workgroup_size: params.workgroup_size,
         camera_position: Array.from(camera.position),
         camera_rotation: Array.from(camera.rotation),
@@ -217,6 +225,7 @@ export default async function init(
       time();
       const encoder = device.createCommandEncoder();
       const texture_view = context.getCurrentTexture().createView();
+      gaussian_renderer?.set_viewport(canvas.width, canvas.height);
       renderer.frame(encoder, texture_view);
       device.queue.submit([encoder.finish()]);
     }
