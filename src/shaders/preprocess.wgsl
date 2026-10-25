@@ -1,3 +1,4 @@
+alias SplatFloat = f32;
 // Rotation and SH arithmetic can use f16; projection keeps its f32 range.
 alias ShapeFloat = f32;
 
@@ -63,8 +64,8 @@ struct Splat {
     center: vec4<f32>,
     half_size: vec2<f32>,
     radius: f32,
-    conic: vec4<f32>,
-    color: vec4<f32>,
+    conic: vec4<SplatFloat>,
+    color: vec4<SplatFloat>,
 };
 
 @group(0) @binding(0)
@@ -199,8 +200,8 @@ fn preprocess(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgr
     splats[idx].center = vec4<f32>(ndc, 1.);
     splats[idx].half_size = 2. * vec2<f32>(radius) / camera.viewport;
     splats[idx].radius = radius;
-    splats[idx].conic = vec4<f32>(cov_yy, -cov_xy, cov_xx, 0.) / determinant;
-    splats[idx].color = vec4<f32>(color, opacity);
+    splats[idx].conic = vec4<SplatFloat>(vec4<f32>(cov_yy, -cov_xy, cov_xx, 0.) / determinant);
+    splats[idx].color = vec4<SplatFloat>(vec4<f32>(color, opacity));
     let visible_idx = atomicAdd(&sort_infos.keys_size, 1u);
     sort_indices[visible_idx] = idx;
     // The radix sorter is ascending. Inverting positive depth bits puts far points first.

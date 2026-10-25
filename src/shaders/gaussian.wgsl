@@ -1,3 +1,4 @@
+alias SplatFloat = f32;
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) offset: vec2<f32>,
@@ -9,8 +10,8 @@ struct Splat {
     center: vec4<f32>,
     half_size: vec2<f32>,
     radius: f32,
-    conic: vec4<f32>,
-    color: vec4<f32>,
+    conic: vec4<SplatFloat>,
+    color: vec4<SplatFloat>,
 };
 
 @group(0) @binding(0)
@@ -29,8 +30,8 @@ fn vs_main(
     var out: VertexOutput;
     out.position = splat.center + vec4<f32>(corner * splat.half_size, 0., 0.);
     out.offset = corner * splat.radius;
-    out.conic = splat.conic.xyz;
-    out.color = splat.color;
+    out.conic = vec3<f32>(splat.conic.xyz);
+    out.color = vec4<f32>(splat.color);
     return out;
 }
 

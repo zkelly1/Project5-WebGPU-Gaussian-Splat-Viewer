@@ -42,8 +42,8 @@ export default function get_renderer(
 
   const nulling_data = new Uint32Array([0]);
   const dispatch_data = new Uint32Array([0, 1, 1]);
-  // Center, quad size, conic, and color occupy 64 bytes with storage alignment.
-  const splat_buffer = createBuffer(device, '2d splats', Math.max(1, pc.num_points) * 64,
+  // Full precision uses 64 bytes per splat; packed conic and color use 48.
+  let splat_buffer = createBuffer(device, '2d splats', Math.max(1, pc.num_points) * 64,
     GPUBufferUsage.STORAGE);
   const settings_data = new Float32Array([1, pc.sh_deg, 1, 0]);
   const settings_buffer = createBuffer(device, 'render settings', 16,
@@ -95,15 +95,18 @@ export default function get_renderer(
       { binding: 1, resource: { buffer: settings_buffer } },
     ],
   });
-  const gaussian_bind_group = device.createBindGroup({
-    label: 'preprocess gaussians',
-    layout: preprocess_pipeline.getBindGroupLayout(1),
-    entries: [
-      { binding: 0, resource: { buffer: pc.gaussian_3d_buffer } },
-      { binding: 1, resource: { buffer: splat_buffer } },
-      { binding: 2, resource: { buffer: pc.sh_buffer } },
-    ],
-  });
+  function gaussian_bindings() {
+    return device.createBindGroup({
+      label: 'preprocess gaussians',
+      layout: preprocess_pipeline.getBindGroupLayout(1),
+      entries: [
+        { binding: 0, resource: { buffer: pc.gaussian_3d_buffer } },
+        { binding: 1, resource: { buffer: splat_buffer } },
+        { binding: 2, resource: { buffer: pc.sh_buffer } },
+      ],
+    });
+  }
+  let gaussian_bind_group = gaussian_bindings();
 
   const sort_bind_group = device.createBindGroup({
     label: 'sort',
@@ -120,32 +123,39 @@ export default function get_renderer(
   // ===============================================
   //    Create Render Pipeline and Bind Groups
   // ===============================================
-  const render_shader = device.createShaderModule({ code: renderWGSL });
-  const render_pipeline = device.createRenderPipeline({
-    label: 'gaussian quads',
-    layout: 'auto',
-    vertex: { module: render_shader, entryPoint: 'vs_main' },
-    fragment: {
-      module: render_shader,
-      entryPoint: 'fs_main',
-      targets: [{
-        format: presentation_format,
-        blend: {
-          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-        },
-      }],
-    },
-    primitive: { topology: 'triangle-strip' },
-  });
-  const render_bind_group = device.createBindGroup({
-    label: 'quad splats and indices',
-    layout: render_pipeline.getBindGroupLayout(0),
-    entries: [
-      { binding: 0, resource: { buffer: splat_buffer } },
-      { binding: 1, resource: { buffer: sorter.ping_pong[0].sort_indices_buffer } },
-    ],
-  });
+  function render_pipeline_for(half: boolean) {
+    const render_shader = device.createShaderModule({ code: half
+      ? renderWGSL.replace('alias SplatFloat = f32;', 'enable f16;\nalias SplatFloat = f16;') : renderWGSL });
+    return device.createRenderPipeline({
+      label: 'gaussian quads',
+      layout: 'auto',
+      vertex: { module: render_shader, entryPoint: 'vs_main' },
+      fragment: {
+        module: render_shader,
+        entryPoint: 'fs_main',
+        targets: [{
+          format: presentation_format,
+          blend: {
+            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          },
+        }],
+      },
+      primitive: { topology: 'triangle-strip' },
+    });
+  }
+  let render_pipeline = render_pipeline_for(false);
+  function render_bindings() {
+    return device.createBindGroup({
+      label: 'quad splats and indices',
+      layout: render_pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: splat_buffer } },
+        { binding: 1, resource: { buffer: sorter.ping_pong[0].sort_indices_buffer } },
+      ],
+    });
+  }
+  let render_bind_group = render_bindings();
 
   // ===============================================
   //    Command Encoder Functions
@@ -164,7 +174,7 @@ export default function get_renderer(
     if (!preprocess_pipelines.has(key)) {
       if (half && !half_shader) {
         half_shader = device.createShaderModule({
-          code: preprocessWGSL.replace('alias ShapeFloat = f32;', 'enable f16;\nalias ShapeFloat = f16;'),
+          code: preprocessWGSL.replace('alias ShapeFloat = f32;', 'alias ShapeFloat = f16;').replace('alias SplatFloat = f32;', 'enable f16;\nalias SplatFloat = f16;'),
         });
       }
       preprocess_pipelines.set(key, device.createComputePipeline({
@@ -201,11 +211,11 @@ export default function get_renderer(
       encoder.copyBufferToBuffer(sorter.sort_info_buffer, 0, draw_buffer, 4, 4);
       let use_tiles = tile_sorting;
       if (use_tiles) {
-        if (!tiles) tiles = get_tile_renderer(device, presentation_format, splat_buffer, sorter, pc.num_points);
+        if (!tiles) tiles = get_tile_renderer(device, presentation_format, splat_buffer, sorter, pc.num_points, half_precision);
         use_tiles = tiles.resize(viewport_width, viewport_height);
         if (use_tiles) tiles.bin(encoder);
       }
-      // Keep the complete sorted list for dense tiles that exceed local capacity.
+      // The global dispatch is enabled only if the packed tile pool overflows.
       sorter.sort(encoder);
       if (use_tiles) {
         tiles!.frame(encoder, texture_view);
@@ -248,7 +258,15 @@ export default function get_renderer(
       if (enabled && !device.features.has('shader-f16')) {
         throw new Error('Half precision requires shader-f16 support.');
       }
+      if (enabled === half_precision) return;
       select_pipeline(workgroup_size, enabled);
+      splat_buffer.destroy();
+      splat_buffer = createBuffer(device, '2d splats', Math.max(1, pc.num_points) * (enabled ? 48 : 64), GPUBufferUsage.STORAGE);
+      gaussian_bind_group = gaussian_bindings();
+      render_pipeline = render_pipeline_for(enabled);
+      render_bind_group = render_bindings();
+      tiles?.destroy();
+      tiles = undefined;
     },
     camera_buffer,
   };
